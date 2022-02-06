@@ -4,7 +4,7 @@
 
 This module uses a few packages, you can download them by running:
 
-`pip install -r dc_tagging/requirements.txt`
+`pip install -r scrape/requirements.txt`
 
 
 ## Data Source
