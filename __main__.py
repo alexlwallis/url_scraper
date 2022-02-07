@@ -9,54 +9,61 @@ import json
 import functools
 import psycopg2
 import sys
-import concurrent.futures
 import os
 import validators.url
+from datetime import datetime
 
 
 logging.basicConfig(filename='./scrape/log.log', encoding='utf-8', level=logging.INFO)
 
 
-MAX_THREADS = 20
 OUTPUT_FILE = "./scrape/output.json"
 
 
 # Gets the html of the url, strains for only <a> tags, parses them and check if any are
 # applicable and return objects to be converted to json
-def crawl(url):
-    html = asyncio.run(get_html(url))
-    # If expected return doesn't return a list the url isn't what we want
-    if html:
-        flag = False
-        obj = {}
-        multiple_found = {}
-        # Only looking for <a> tags
-        only_anchor = SoupStrainer("a")
-        # This now only looks through only <a> tags within html
-        for link in BeautifulSoup(html, "html.parser", parse_only=only_anchor):
-            if link.has_attr('href'):
-                # If url looks like an instance we'd like to extract
-                # send url to function that will extract handle/id
-                result = (expected_url(link['href']))
-                if isinstance(result, list):
-                    key, val = result[0], result[1]
-                    if key not in obj.keys():
-                        obj[key] = val
-                        multiple_found[key] = [val]
+async def crawl(url):
+    # Handle poorly formed URLs
+    quick_fix_url = url if url.startswith('http') else ('http://' + url)
+
+    # Check if URL is valid
+    if validators.url(quick_fix_url):
+
+        html = await (get_html(quick_fix_url))
+        # If expected return doesn't return a list the url isn't what we want
+        if html:
+            flag = False
+            obj = {}
+            multiple_found = {}
+            # Only looking for <a> tags
+            only_anchor = SoupStrainer("a")
+            # This now only looks through only <a> tags within html
+            for link in BeautifulSoup(html, "html.parser", parse_only=only_anchor):
+                if link.has_attr('href'):
+                    # If url looks like an instance we'd like to extract
+                    # send url to function that will extract handle/id
+                    result = (expected_url(link['href']))
+                    if isinstance(result, list):
+                        key, val = result[0], result[1]
+                        if key not in obj.keys():
+                            obj[key] = val
+                            multiple_found[key] = [val]
+                        else:
+                            # If new scraped link value isn't same as old value
+                            if (obj[key].lower() != val.lower()):
+                                logging.warning(f"{url}: Extra {key} value found: {val}")
+                                multiple_found[key].append(val)
+                                flag = True
+                            pass
                     else:
-                        # If new scraped link value isn't same as old value
-                        if (obj[key].lower() != val.lower()):
-                            logging.warning(f"{url}: Extra {key} value found: {val}")
-                            multiple_found[key].append(val)
-                            flag = True
                         pass
-                else:
-                    pass
-        if len(obj.keys()) > 0:
-            obj = most_accurate(url, multiple_found) if flag else obj
-            create_json(obj)
+            if len(obj.keys()) > 0:
+                obj = most_accurate(url, multiple_found) if flag else obj
+                create_json(obj)
+        else:
+            return
     else:
-        return
+        logging.warning(f"{quick_fix_url} is not a valid url")
 
 
 # Used by above function, if multiple fb handles/twitter handles etc in
@@ -101,31 +108,25 @@ def expected_url(url):
 # Adds 'http://', if https isn't included in the URL, validates the URL,
 # asynchronously runs get request for the URL (5 sec timeout) and awaits
 # the result. (Requests doesn't run async natively)
-async def get_html(url):
-    # Handle poorly formed URLs
-    quick_fix_url = url if url.startswith('http') else ('http://' + url)
-    # validators.url() is a regex to check if url is valid
-    if validators.url(quick_fix_url):
-        loop = asyncio.get_event_loop()
-        # Simulate real browser
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.76 Safari/537.36",
-            "Upgrade-Insecure-Requests": "1",
-            "DNT": "1",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5", "Accept-Encoding": "gzip, deflate"
-        }
-        try:
-            # Handling timeouts
-            response = loop.run_in_executor(None, functools.partial(requests.get, quick_fix_url, headers=headers, timeout=5))
-            awaited = await response
-            return awaited.content
+async def get_html(quick_fix_url):
+    loop = asyncio.get_event_loop()
+    # Simulate real browser
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.76 Safari/537.36",
+        "Upgrade-Insecure-Requests": "1",
+        "DNT": "1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5", "Accept-Encoding": "gzip, deflate"
+    }
+    try:
+        # Handling timeouts
+        response = loop.run_in_executor(None, functools.partial(requests.get, quick_fix_url, headers=headers, timeout=5))
+        awaited = await response
+        return awaited.content
 
-        except Exception as e:
-            logging.warning(f"{quick_fix_url}: {e}")
-        return False
-    else:
-        logging.warning(f"{quick_fix_url} is not a valid URL")
+    except Exception as e:
+        logging.warning(f"{quick_fix_url}: {e}")
+    return False
 
 
 def create_json(json_links):
@@ -148,31 +149,37 @@ def finish_json_file():
 
 
 def get_csv_records(file):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        with open(f'./scrape/{file}') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            for row in csv_reader:
-                executor.map(crawl, [row[0]])
+    loop = asyncio.get_event_loop()
+    tasks = []
+    with open(f'./scrape/{file}') as csv_file:
+        csv_reader = csv.reader(csv_file)
+        for row in csv_reader:
+            tasks.append(loop.create_task(crawl(row[0])))
+        loop.run_until_complete(asyncio.wait(tasks))
+        loop.close()
 
 
 def get_db_records(dbname, user, password, column, table):
+    loop = asyncio.get_event_loop()
+    tasks = []
     conn = psycopg2.connect(dbname=dbname, user=user, password=password)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT {column} FROM {table}")
-        for record in cursor:
-            executor.map(crawl, [record[0]])
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT {column} FROM {table}")
+    for record in cursor:
+        scrape_and_ingest = crawl(record[0])
+        tasks.append(loop.create_task(scrape_and_ingest))
+    loop.run_until_complete(asyncio.wait(tasks))
+    loop.close()
 
 
 if __name__ == "__main__":
+    start = datetime.now()
     try:
         # Has at least three args
         if len(sys.argv) > 2:
             type = sys.argv[1]
             starting_json_file()
             if type == 'db':
-                print(sys.argv)
-                print(len(sys.argv))
                 try:
                     db_name = sys.argv[2]
                     user = sys.argv[3]
@@ -190,5 +197,7 @@ if __name__ == "__main__":
             finish_json_file()
         else:
             logging.warning("Module has been called incorrectly, missing additional arguments")
+        end = datetime.now()
+        print(f"Time it take: {end-start}")
     except Exception as e:
         logging.warning("Module has been called incorrectly, please refer to README.md -  error: ", e)

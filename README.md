@@ -25,7 +25,7 @@ No need to include the relative path or absolute path.
 
 If you are intending on using a PostgreSQL database as a data source then you'll need to supply the database name, the user name and the password to connect to the database. You will also need to supply the column and table name to select the URLs.
 
-`python -m scrape db db_name user password column table`
+`python -m scrape db {db_name} {user} {password} {column} {table}`
 
 Example:
 
@@ -45,3 +45,4 @@ This module uses the logging module in Python's standard library and logging inf
 - PostgreSQL is only DB we are interested in using
 - When we are given the URL we are only scraping the URL itself, not all of the possible paths for the URL
 - Will handle redirects for the inputted URL, but not for redirects for the various links within the inputted URLs html
+- After script is run, output.json will be removed from directory and used else where.
