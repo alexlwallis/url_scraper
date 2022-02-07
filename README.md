@@ -25,7 +25,7 @@ No need to include the relative path or absolute path.
 
 If you are intending on using a PostgreSQL database as a data source then you'll need to supply the database name, the user name and the password to connect to the database. You will also need to supply the column and table name to select the URLs.
 
-`python -m scrape db db_name user password column table`
+`python -m scrape db {db_name} {user} {password} {column} {table}`
 
 Example:
 
